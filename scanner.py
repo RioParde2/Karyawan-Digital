@@ -1,5 +1,5 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 2.1)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 2.2)
 
 Karyawan 1 - PENCARI: mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - PENILAI RISIKO (manajer risiko & satpam): mengecek ulang tiap
@@ -12,10 +12,12 @@ Kamu sendiri yang menganalisa dan menentukan entry/exit.
 BUKAN saran keuangan. Tidak ada jaminan profit.
 """
 import json
+import math
 import os
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 # ====== PENGATURAN KARYAWAN 1: PENCARI ======
@@ -33,6 +35,7 @@ SEEN_FILE = Path("seen.json")   # riwayat agar tidak melapor koin yang sama
 MIN_LP_LOCKED_PCT = 90          # likuiditas harus terkunci/terbakar minimal sekian %
 MAX_SINGLE_WALLET_PCT = 10      # satu dompet pemilik maksimal sekian % pasokan
 MIN_SECURITY_SCORE = 90         # skor keamanan kontrak minimal sekian %
+MAX_INSIDER_PCT = 5            # insider / dompet kembar: total maksimal sekian % pasokan
 MAX_RISK_TO_REPORT = 70         # skor risiko gabungan >= ini juga ditolak
 ANALYZE_MAX = 12                # maksimal kandidat yang diperiksa tiap putaran
 RUGCHECK = "https://api.rugcheck.xyz/v1"
@@ -118,9 +121,19 @@ def evaluate(p, now_ms=None):
     if buys > 0 and sells < buys * MIN_SELL_TO_BUY:
         return None  # hampir tidak ada yang jual: ciri honeypot
 
-    score = min(vol / liq, 10) * 2 + min(total / 500, 3) + (1 if buys >= sells else 0)
+    turnover = vol / liq
+    # putaran volume wajar diberi nilai; yang berlebihan dicurigai volume palsu
+    t_score = min(turnover, 8) * 2 if turnover <= 15 else max(0, 16 - (turnover - 15) * 0.5)
+    score = (
+        t_score
+        + min(math.log10(max(total, 1)) * 1.5, 6)
+        + min(liq / 50_000, 3)
+        + (1 if buys >= sells else 0)
+    )
 
     warnings = []
+    if turnover > 20:
+        warnings.append(f"volume {turnover:.0f}x likuiditas (rawan volume palsu)")
     if chg > 300:
         warnings.append("sudah naik tinggi 24j (rawan beli di pucuk)")
     if chg < -40:
@@ -179,6 +192,9 @@ def analyze_risk(mint):
         ka = r.get("knownAccounts") or {}
         print("DEBUG knownAccounts (2 contoh):", list(ka.items())[:2])
         print("DEBUG risks[0]:", (r.get("risks") or [None])[0])
+        print("DEBUG insiderNetworks:", (r.get("insiderNetworks") or [None])[:2] if r.get("insiderNetworks") else r.get("insiderNetworks"))
+        print("DEBUG graphInsidersDetected:", r.get("graphInsidersDetected"))
+        print("DEBUG jumlah topHolders:", len(r.get("topHolders") or []), "| token:", {k: (r.get("token") or {}).get(k) for k in ("supply", "decimals")})
 
     reject = []
     if r.get("rugged"):
@@ -218,6 +234,27 @@ def analyze_risk(mint):
     elif top_wallet > MAX_SINGLE_WALLET_PCT:
         reject.append(f"satu dompet memegang {top_wallet:.1f}% pasokan (batas {MAX_SINGLE_WALLET_PCT}%)")
 
+    # --- ATURAN 4: insider & dompet kembar (maksimal 5% pasokan) ---
+    insider_pct = 0.0
+    for h in r.get("topHolders") or []:
+        if h.get("address") in pools or h.get("owner") in pools:
+            continue
+        if h.get("insider"):
+            insider_pct += h.get("pct") or 0
+    if insider_pct > MAX_INSIDER_PCT:
+        reject.append(f"dompet insider memegang {insider_pct:.1f}% pasokan (batas {MAX_INSIDER_PCT}%)")
+
+    twin_pct = 0.0
+    for val, cnt in Counter(round(w, 2) for w in wallets if w > 0).items():
+        if cnt >= 3 and val * cnt > MAX_INSIDER_PCT:
+            twin_pct = max(twin_pct, val * cnt)
+            reject.append(f"{cnt} dompet berjumlah identik ({val:.2f}% masing-masing, total {val * cnt:.1f}%): ciri dompet kembar")
+
+    nets = r.get("insiderNetworks") or []
+    if nets and insider_pct == 0 and twin_pct == 0:
+        risk = min(risk + 15, 100)
+        reasons.append("jaringan insider terdeteksi RugCheck (porsi tidak terhitung)")
+
     # --- ATURAN 3: skor keamanan kontrak minimal 90% ---
     sn = r.get("score_normalised")
     security = None
@@ -243,6 +280,7 @@ def analyze_risk(mint):
             "holders": r.get("totalHolders"),
             "top_wallet": top_wallet,
             "security": security,
+            "insider": max(insider_pct, twin_pct),
         },
     }
 
@@ -268,6 +306,7 @@ def fmt(p, score, warnings, an):
         f" - LP terkunci {f['lp_locked']:.0f}% (min {MIN_LP_LOCKED_PCT}%)",
         f" - Dompet terbesar {f['top_wallet']:.1f}% (maks {MAX_SINGLE_WALLET_PCT}%)",
         f" - Skor keamanan {f['security']:.0f}% (min {MIN_SECURITY_SCORE}%)",
+        f" - Insider/dompet kembar {f['insider']:.1f}% (maks {MAX_INSIDER_PCT}%)",
     ]
     if f.get("holders") is not None:
         lines.append(f" - Jumlah holder {f['holders']:,}")

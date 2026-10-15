@@ -1,12 +1,13 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 2.3)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 3.0)
 
 Karyawan 1 - PENCARI: mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - PENILAI RISIKO (manajer risiko & satpam): mengecek ulang tiap
              kandidat Solana lewat RugCheck (gratis, tanpa API key) dengan
              aturan disiplin yang ketat dan skeptis. Gagal satu aturan = REJECT.
 Karyawan 4 - PELAPOR: mengirim ringkasan ke Telegram.
-(Karyawan 3 - EKSEKUTOR kertas: tahap berikutnya.)
+Karyawan 3 - EKSEKUTOR (SIMULASI): trading uang pura-pura dengan aturan baku.
+             Tidak ada dompet, tidak ada uang sungguhan. Data harga asli DexScreener.
 
 Kamu sendiri yang menganalisa dan menentukan entry/exit.
 BUKAN saran keuangan. Tidak ada jaminan profit.
@@ -40,6 +41,20 @@ MAX_INSIDER_PCT = 5            # insider / dompet kembar: total maksimal sekian 
 MAX_RISK_TO_REPORT = 70         # skor risiko gabungan >= ini juga ditolak
 ANALYZE_MAX = 12                # maksimal kandidat yang diperiksa tiap putaran
 RUGCHECK = "https://api.rugcheck.xyz/v1"
+
+# ====== PENGATURAN KARYAWAN 3: EKSEKUTOR SIMULASI (uang pura-pura) ======
+PAPER_START_BALANCE = 1000      # modal simulasi (USD)
+POSITION_USD = 50               # ukuran tiap posisi (5% modal)
+MAX_OPEN_POSITIONS = 5          # maksimal posisi terbuka sekaligus
+STOP_LOSS_PCT = 25              # jual semua jika turun 25% dari harga masuk
+TP1_GAIN_PCT = 50               # take profit: jual sebagian di +50%
+TP1_SELL_FRACTION = 0.5         # ...sebanyak separuh posisi
+TRAIL_FROM_PEAK_PCT = 20        # sisa dijual jika turun 20% dari puncak (setelah take profit)
+MAX_HOLD_HOURS = 48             # jual jika lewat 48 jam
+DAILY_LOSS_LIMIT_PCT = 5        # rugi bersih harian 5% modal -> stop beli sampai besok (UTC)
+LIQ_COLLAPSE_PCT = 50           # jual jika likuiditas anjlok lebih dari 50% (tanda rug)
+FEE_PCT = 1.0                   # biaya per transaksi (fee DEX + biaya lain), konservatif
+MAX_MISSES = 3                  # data harga hilang 3 putaran berturut-turut = dianggap rug
 DEBUG = True                    # cetak contoh data mentah di log (untuk verifikasi)
 # ====================================================================
 
@@ -354,15 +369,179 @@ def send_telegram(text):
         print("Telegram terkirim:", r.status)
 
 
-def load_seen():
+# ==================== KARYAWAN 3: EKSEKUTOR (SIMULASI) ====================
+def _today():
+    return datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%d")
+
+
+def _slip(usd, liq):
+    """Perkiraan geseran harga di pool: kira-kira 2 x ukuran transaksi / likuiditas."""
+    if not liq or liq <= 0:
+        return 0.5
+    return min(2 * usd / liq, 0.5)
+
+
+def paper_sell(pf, pos, tokens, price, liq):
+    gross = tokens * price
+    proceeds = gross * (1 - _slip(gross, liq)) * (1 - FEE_PCT / 100)
+    pf["cash"] += proceeds
+    pos["tokens"] -= tokens
+    pos["realized"] += proceeds
+    return proceeds
+
+
+def paper_close(pf, addr, pos, reason):
+    pnl = pos["realized"] - pos["cost"]
+    pct = pnl / pos["cost"] * 100 if pos["cost"] else 0
+    pf["closed"].append({
+        "symbol": pos["symbol"], "addr": addr, "cost": round(pos["cost"], 2),
+        "proceeds": round(pos["realized"], 2), "pnl": round(pnl, 2),
+        "pct": round(pct, 1), "reason": reason, "day": _today(),
+        "opened_ts": pos["opened_ts"], "closed_ts": time.time(),
+    })
+    pf["closed"] = pf["closed"][-300:]
+    del pf["positions"][addr]
+    return (f"JUAL {pos['symbol']} ({reason}): modal ${pos['cost']:.2f}, "
+            f"hasil ${pos['realized']:.2f} = {pnl:+.2f} USD ({pct:+.0f}%)")
+
+
+def paper_exits(pf):
+    """Periksa semua posisi terbuka dan jual sesuai aturan baku."""
+    positions = pf["positions"]
+    if not positions:
+        return []
+    pairs = fetch_best_pairs([("solana", a) for a in positions])
+    by_addr = {(p.get("baseToken") or {}).get("address"): p for p in pairs}
+    lines = []
+    for addr, pos in list(positions.items()):
+        p = by_addr.get(addr)
+        try:
+            price = float(p["priceUsd"]) if p and p.get("priceUsd") else None
+        except (TypeError, ValueError):
+            price = None
+        liq = ((p or {}).get("liquidity") or {}).get("usd") or 0
+
+        if price is None:
+            pos["misses"] = pos.get("misses", 0) + 1
+            if pos["misses"] >= MAX_MISSES:
+                lines.append(paper_close(pf, addr, pos, "data harga hilang, dianggap rug (hasil 0)"))
+            continue
+
+        pos["misses"] = 0
+        pos["last_price"] = price
+        pos["peak"] = max(pos.get("peak", price), price)
+        age_h = (time.time() - pos["opened_ts"]) / 3600
+        entry = pos["entry_price"]
+
+        reason = None
+        if liq and pos.get("entry_liq") and liq < pos["entry_liq"] * (1 - LIQ_COLLAPSE_PCT / 100):
+            reason = f"likuiditas anjlok >{LIQ_COLLAPSE_PCT}%, tanda rug"
+        elif price <= entry * (1 - STOP_LOSS_PCT / 100):
+            reason = f"stop-loss -{STOP_LOSS_PCT}%"
+        elif pos.get("tp1_done") and price <= pos["peak"] * (1 - TRAIL_FROM_PEAK_PCT / 100):
+            reason = f"trailing stop {TRAIL_FROM_PEAK_PCT}% dari puncak"
+        elif age_h >= MAX_HOLD_HOURS:
+            reason = f"batas waktu {MAX_HOLD_HOURS} jam"
+
+        if reason:
+            paper_sell(pf, pos, pos["tokens"], price, liq)
+            lines.append(paper_close(pf, addr, pos, reason))
+        elif not pos.get("tp1_done") and price >= entry * (1 + TP1_GAIN_PCT / 100):
+            got = paper_sell(pf, pos, pos["tokens"] * TP1_SELL_FRACTION, price, liq)
+            pos["tp1_done"] = True
+            pos["peak"] = price
+            lines.append(f"JUAL SEPARUH {pos['symbol']} (take profit +{TP1_GAIN_PCT}%): hasil ${got:.2f}, sisa ditahan dengan trailing stop")
+    return lines
+
+
+def daily_halted(pf):
+    today = _today()
+    realized = sum(c["pnl"] for c in pf["closed"] if c.get("day") == today)
+    return realized <= -DAILY_LOSS_LIMIT_PCT / 100 * pf["start"]
+
+
+def paper_enter(pf, accepted):
+    """Beli (simulasi) kandidat yang lolos Manajer Risiko, sesuai batas posisi dan kas."""
+    if not accepted:
+        return []
+    if daily_halted(pf):
+        return [f"Batas rugi harian {DAILY_LOSS_LIMIT_PCT}% tercapai: tidak membuka posisi baru sampai besok (UTC)."]
+    lines = []
+    for _, _, _, p, _ in accepted:
+        base = p["baseToken"]
+        addr = base["address"]
+        if addr in pf["positions"]:
+            continue
+        if len(pf["positions"]) >= MAX_OPEN_POSITIONS:
+            lines.append(f"Lewati {base.get('symbol', '?')}: sudah {MAX_OPEN_POSITIONS} posisi terbuka.")
+            break
+        amount = min(POSITION_USD, pf["cash"])
+        if amount < POSITION_USD:
+            lines.append("Kas simulasi tidak cukup untuk posisi baru.")
+            break
+        try:
+            price = float(p["priceUsd"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        liq = (p.get("liquidity") or {}).get("usd") or 0
+        slip = _slip(amount, liq)
+        tokens = (amount * (1 - FEE_PCT / 100)) / (price * (1 + slip))
+        pf["cash"] -= amount
+        pf["positions"][addr] = {
+            "symbol": base.get("symbol", "?"), "url": p.get("url", ""),
+            "tokens": tokens, "cost": amount, "realized": 0.0,
+            "entry_price": amount / tokens, "entry_liq": liq,
+            "peak": price, "last_price": price, "tp1_done": False,
+            "opened_ts": time.time(), "misses": 0,
+        }
+        lines.append(
+            f"BELI {base.get('symbol', '?')}: ${amount:.0f} @ ${price:.8f} (geseran ~{slip * 100:.1f}% + fee {FEE_PCT}%) | "
+            f"stop-loss -{STOP_LOSS_PCT}% | take profit separuh di +{TP1_GAIN_PCT}% | maks {MAX_HOLD_HOURS} jam"
+        )
+    return lines
+
+
+def portfolio_summary(pf):
+    pos_value = sum(p["tokens"] * p.get("last_price", p["entry_price"]) for p in pf["positions"].values())
+    equity = pf["cash"] + pos_value
+    closed = pf["closed"]
+    wins = sum(1 for c in closed if c["pnl"] > 0)
+    realized = sum(c["pnl"] for c in closed)
+    return (
+        "[SIMULASI] Ringkasan uang pura-pura\n"
+        f"Nilai total (perkiraan): ${equity:,.2f} ({(equity / pf['start'] - 1) * 100:+.1f}% dari ${pf['start']:,.0f})\n"
+        f"Kas: ${pf['cash']:,.2f} | posisi terbuka: {len(pf['positions'])}\n"
+        f"Trade selesai: {len(closed)} (menang {wins}) | untung/rugi terealisasi: {realized:+.2f} USD"
+    )
+
+
+# ==================== PENYIMPANAN STATUS ====================
+def load_state():
+    """Status disimpan di seen.json: riwayat koin yang sudah dicek + portofolio simulasi."""
     try:
-        return set(json.loads(SEEN_FILE.read_text()))
+        raw = json.loads(SEEN_FILE.read_text())
     except Exception:
-        return set()
+        raw = {}
+    if isinstance(raw, list):  # format lama: hanya daftar koin
+        raw = {"seen": raw}
+    raw.setdefault("seen", [])
+    pf = raw.setdefault("portfolio", {})
+    pf.setdefault("start", PAPER_START_BALANCE)
+    pf.setdefault("cash", pf["start"])
+    pf.setdefault("positions", {})
+    pf.setdefault("closed", [])
+    return raw
+
+
+def save_state(state):
+    state["seen"] = sorted(set(state["seen"]))[-2000:]
+    SEEN_FILE.write_text(json.dumps(state))
 
 
 def main():
-    seen = load_seen()
+    state = load_state()
+    seen = set(state["seen"])
+    pf = state["portfolio"]
     candidates = fetch_candidates()
     print(f"Kandidat awal: {len(candidates)}")
     pairs = fetch_best_pairs(candidates)
@@ -411,7 +590,16 @@ def main():
     for sym, why in rejected:
         print(f"  REJECT {sym}: {'; '.join(why)}")
 
+    # Karyawan 3: eksekutor simulasi (jual dulu, baru beli)
+    sim_lines = paper_exits(pf)
+    sim_lines += paper_enter(pf, accepted)
+    for ln in sim_lines:
+        print("  SIMULASI:", ln)
+
     # Karyawan 4: laporan
+    manual = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch") == "workflow_dispatch"
+    daily = datetime.now(timezone.utc).hour < 3
+    parts = []
     if accepted or rejected:
         header = "Laporan Djiwa Crypto Labs (bukan saran keuangan, cek sendiri sebelum entry)\n"
         body = "\n\n".join(fmt(p, sc, w, an) for _, sc, w, p, an in accepted)
@@ -421,21 +609,24 @@ def main():
             body += f"\n\nDitolak Manajer Risiko ({len(rejected)}):"
             for sym, why in rejected[:8]:
                 body += f"\n- {sym}: " + "; ".join(why[:2])
-        send_telegram(header + "\n" + body)
-    else:
-        # tidak ada laporan baru: kirim kabar singkat (manual: selalu; terjadwal: sekali sehari)
-        manual = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch") == "workflow_dispatch"
-        daily = datetime.now(timezone.utc).hour < 3
-        if manual or daily:
-            send_telegram(
+        parts.append(header + "\n" + body)
+    if sim_lines:
+        parts.append("[SIMULASI] Uang pura-pura, bukan transaksi sungguhan\n" + "\n".join(sim_lines))
+    if manual or daily:
+        if not parts:
+            parts.append(
                 "Djiwa Crypto Labs: karyawan digital aktif, tidak ada kandidat baru.\n"
                 f"Kandidat awal {len(candidates)} | data pair {len(pairs)} | lolos saring awal {len(stage1)}\n"
                 f"Tersaring: {funnel_text}"
             )
+        parts.append(portfolio_summary(pf))
+    for part in parts:
+        send_telegram(part)
 
     for addr in checked:
         seen.add(addr)
-    SEEN_FILE.write_text(json.dumps(sorted(seen)[-2000:]))
+    state["seen"] = list(seen)
+    save_state(state)
 
 
 if __name__ == "__main__":

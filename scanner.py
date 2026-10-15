@@ -1,5 +1,5 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 2.2)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 2.3)
 
 Karyawan 1 - PENCARI: mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - PENILAI RISIKO (manajer risiko & satpam): mengecek ulang tiap
@@ -15,6 +15,7 @@ import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -100,26 +101,43 @@ def fetch_best_pairs(candidates):
     return best
 
 
-def evaluate(p, now_ms=None):
-    """Kembalikan (skor, peringatan) jika lolos saring, atau None jika tidak."""
+def stage1_reason(p, now_ms=None):
+    """Kembalikan alasan koin gagal saring awal, atau None jika lolos."""
     now_ms = now_ms or time.time() * 1000
     liq = (p.get("liquidity") or {}).get("usd") or 0
     vol = (p.get("volume") or {}).get("h24") or 0
     tx = (p.get("txns") or {}).get("h24") or {}
     buys, sells = tx.get("buys", 0), tx.get("sells", 0)
-    total = buys + sells
     created = p.get("pairCreatedAt")
     if not created:
-        return None
+        return "data umur kosong"
     age_h = (now_ms - created) / 3_600_000
-    chg = (p.get("priceChange") or {}).get("h24") or 0
-
-    if liq < MIN_LIQUIDITY_USD or vol < MIN_VOLUME_24H_USD or total < MIN_TXNS_24H:
-        return None
-    if not (MIN_AGE_HOURS <= age_h <= MAX_AGE_HOURS):
-        return None
+    if liq < MIN_LIQUIDITY_USD:
+        return "likuiditas kecil"
+    if vol < MIN_VOLUME_24H_USD:
+        return "volume kecil"
+    if buys + sells < MIN_TXNS_24H:
+        return "transaksi sedikit"
+    if age_h < MIN_AGE_HOURS:
+        return "terlalu baru"
+    if age_h > MAX_AGE_HOURS:
+        return "terlalu lama"
     if buys > 0 and sells < buys * MIN_SELL_TO_BUY:
-        return None  # hampir tidak ada yang jual: ciri honeypot
+        return "ciri honeypot"
+    return None
+
+
+def evaluate(p, now_ms=None):
+    """Kembalikan (skor, peringatan) jika lolos saring, atau None jika tidak."""
+    now_ms = now_ms or time.time() * 1000
+    if stage1_reason(p, now_ms):
+        return None
+    liq = (p.get("liquidity") or {}).get("usd") or 0
+    vol = (p.get("volume") or {}).get("h24") or 0
+    tx = (p.get("txns") or {}).get("h24") or {}
+    buys, sells = tx.get("buys", 0), tx.get("sells", 0)
+    total = buys + sells
+    chg = (p.get("priceChange") or {}).get("h24") or 0
 
     turnover = vol / liq
     # putaran volume wajar diberi nilai; yang berlebihan dicurigai volume palsu
@@ -348,16 +366,27 @@ def main():
     candidates = fetch_candidates()
     print(f"Kandidat awal: {len(candidates)}")
     pairs = fetch_best_pairs(candidates)
+    print(f"Data pair ditemukan: {len(pairs)}")
 
-    # Karyawan 1: saring awal
+    # Karyawan 1: saring awal (sambil menghitung alasan gagal)
+    funnel = Counter()
     stage1 = []
     for p in pairs:
         addr = (p.get("baseToken") or {}).get("address")
-        if not addr or addr in seen:
+        if not addr:
+            continue
+        if addr in seen:
+            funnel["sudah dilaporkan"] += 1
+            continue
+        why = stage1_reason(p)
+        if why:
+            funnel[why] += 1
             continue
         ev = evaluate(p)
         if ev:
             stage1.append((ev[0], ev[1], p))
+    funnel_text = ", ".join(f"{k} {v}" for k, v in funnel.most_common()) or "-"
+    print(f"Alasan tersaring: {funnel_text}")
     stage1.sort(key=lambda x: x[0], reverse=True)
     stage1 = stage1[:ANALYZE_MAX]
     print(f"Lolos saring awal (akan dicek manajer risiko): {len(stage1)}")
@@ -393,6 +422,16 @@ def main():
             for sym, why in rejected[:8]:
                 body += f"\n- {sym}: " + "; ".join(why[:2])
         send_telegram(header + "\n" + body)
+    else:
+        # tidak ada laporan baru: kirim kabar singkat (manual: selalu; terjadwal: sekali sehari)
+        manual = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch") == "workflow_dispatch"
+        daily = datetime.now(timezone.utc).hour < 3
+        if manual or daily:
+            send_telegram(
+                "Djiwa Crypto Labs: karyawan digital aktif, tidak ada kandidat baru.\n"
+                f"Kandidat awal {len(candidates)} | data pair {len(pairs)} | lolos saring awal {len(stage1)}\n"
+                f"Tersaring: {funnel_text}"
+            )
 
     for addr in checked:
         seen.add(addr)

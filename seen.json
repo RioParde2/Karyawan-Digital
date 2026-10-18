@@ -11,6 +11,7 @@
     "3rF2NSivMQcHgKJfSQST2SHESmsHr6vHbzfkVgG2pump",
     "3zxtzoumrXqaqS2CDRjnbVEbf1tb12d5fWwMfa2Npump",
     "48hnR1CWtafBumJsJod6Q8yduwDuYyumCJzuBVzvpump",
+    "4bLHGwcRd4GCVsSP8uRMcrWMh1nBCVcNM2CC9AWPpump",
     "4by8accPvdRcmDEvJy1svdSJMwfVcNGyWqgQw9EPpump",
     "4jjQjDRYd7xLcFMViRsz4GvtgU6gPZgbVaxN3Rq9pump",
     "5e8GPzhqxLKFVU6gb87aJLZMoSQnbjBhQupXvCCZpump",
@@ -48,23 +49,8 @@
   ],
   "portfolio": {
     "start": 1000,
-    "cash": 906.333324485552,
-    "positions": {
-      "kpw3mRFBxzWFcQiLjPE1AXM6bSQhwFoUY8WQAKbpump": {
-        "symbol": "WAITIE",
-        "url": "https://dexscreener.com/solana/eqjmaageyqpnpojgirsw7jrsr5hkta2ao5wrambzp8i4",
-        "tokens": 263373.7960704119,
-        "cost": 50,
-        "realized": 39.35239498555115,
-        "entry_price": 9.492212351040554e-05,
-        "entry_liq": 25100.41,
-        "peak": 0.0001679,
-        "last_price": 0.0001679,
-        "tp1_done": true,
-        "opened_ts": 1792157994.6361234,
-        "misses": 0
-      }
-    },
+    "cash": 955.6076807917899,
+    "positions": {},
     "closed": [
       {
         "symbol": "Starman",
@@ -222,6 +208,19 @@
           "security": 99,
           "score": 7.7
         }
+      },
+      {
+        "symbol": "WAITIE",
+        "addr": "kpw3mRFBxzWFcQiLjPE1AXM6bSQhwFoUY8WQAKbpump",
+        "cost": 50,
+        "proceeds": 88.63,
+        "pnl": 38.63,
+        "pct": 77.3,
+        "reason": "batas waktu 48 jam",
+        "day": "2026-10-18",
+        "opened_ts": 1792157994.6361234,
+        "closed_ts": 1792340693.277233,
+        "tags": {}
       }
     ]
   },
@@ -242,15 +241,23 @@
       "ts": 1792326656.1563282,
       "why": "likuiditas belum terkunci (hanya 0%, minimal 90%)",
       "done": false
+    },
+    {
+      "sym": "bwigitte",
+      "addr": "4bLHGwcRd4GCVsSP8uRMcrWMh1nBCVcNM2CC9AWPpump",
+      "price": 8.748e-05,
+      "ts": 1792340692.765745,
+      "why": "jaringan insider memegang sekitar 21.8% pasokan (batas 5%)",
+      "done": false
     }
   ],
   "dashboard": {
-    "updated_at": "12:31:07 UTC",
-    "pnl_total": -49.45,
-    "pnl_floating": 19.22,
-    "open_positions_count": "1/5",
-    "equity": 950.55,
-    "cash": 906.33,
+    "updated_at": "16:25:01 UTC",
+    "pnl_total": -44.39,
+    "pnl_floating": 0,
+    "open_positions_count": "0/5",
+    "equity": 955.61,
+    "cash": 955.61,
     "status_karyawan": {
       "radar": "Sedang bersiap memindai pasar...",
       "perisai": "Menunggu kandidat dari Radar...",

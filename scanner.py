@@ -1,5 +1,5 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 3.3)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 3.4)
 
 Karyawan 1 - DJIWA RADAR (Pencari): mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - DJIWA PERISAI (Penilai Risiko, manajer risiko & satpam): mengecek ulang tiap
@@ -18,7 +18,7 @@ import math
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -61,6 +61,8 @@ MAX_ENTRY_CHANGE_PCT = 300      # Sigap tidak membeli koin yang sudah naik >300%
 MIN_ENTRY_CHANGE_PCT = -30      # ...dan tidak menangkap pisau jatuh (turun >30% dalam 24 jam)
 SHADOW_HOURS = 24               # koin yang ditolak diamati sekian jam untuk menguji akurasi Perisai
 SHADOW_MAX = 150
+MAX_TURNOVER = 30               # volume 24 jam > 30x likuiditas = REJECT (rawan volume palsu)
+MAX_ACTIVITY = 40               # jumlah catatan aktivitas untuk dashboard
 MIN_TRADES_FOR_REVIEW = 10      # penilaian strategi dimulai setelah sekian trade selesai
 MAX_MISSES = 3                  # data harga hilang 3 putaran berturut-turut = dianggap rug
 DEBUG = True                    # cetak contoh data mentah di log (untuk verifikasi)
@@ -599,37 +601,9 @@ def load_state():
 
 def save_state(state):
     state["seen"] = sorted(set(state["seen"]))[-2000:]
-    
-    # Hitung data PnL & Nilai Posisi untuk Dashboard Web
-    pf = state.get("portfolio", {})
-    start_bal = pf.get("start", 1000)
-    cash = pf.get("cash", start_bal)
-    positions = pf.get("positions", {})
-    
-    pos_val = sum(p["tokens"] * p.get("last_price", p["entry_price"]) for p in positions.values())
-    equity = cash + pos_val
-    pnl_total = equity - start_bal
-    
-    # Hitung PnL Mengambang (floating PnL dari posisi terbuka)
-    pnl_floating = sum((p.get("last_price", p["entry_price"]) - p["entry_price"]) * p["tokens"] for p in positions.values())
-    
-    # Format data khusus dashboard
-    state["dashboard"] = {
-        "updated_at": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
-        "pnl_total": round(pnl_total, 2),
-        "pnl_floating": round(pnl_floating, 2),
-        "open_positions_count": f"{len(positions)}/{MAX_OPEN_POSITIONS}",
-        "equity": round(equity, 2),
-        "cash": round(cash, 2),
-        "status_karyawan": {
-            "radar": state.get("last_radar_status", "Sedang bersiap memindai pasar..."),
-            "perisai": state.get("last_perisai_status", "Menunggu kandidat dari Radar..."),
-            "sigap": state.get("last_sigap_status", "Monitoring posisi terbuka..."),
-            "warta": state.get("last_warta_status", "Menyusun laporan kinerja...")
-        }
-    }
-    
-    SEEN_FILE.write_text(json.dumps(state, indent=2))
+    SEEN_FILE.write_text(json.dumps(state))
+
+
 # ==================== BELAJAR DARI DATA ====================
 def shadow_add(state, p, reasons):
     """Catat koin yang ditolak Perisai untuk diamati: apakah penolakan itu tepat?"""
@@ -682,7 +656,8 @@ def learning_report(pf, state):
         lines.append(f"Trade: {n} selesai, menang {len(wins)} ({len(wins) / n * 100:.0f}%). Rata-rata menang {avg_w:+.0f}%, "
                      f"rata-rata kalah {avg_l:+.0f}%, hasil rata-rata ${exp:+.2f} per trade.")
         for name, f in (("naik 24j >100% saat dibeli", lambda t: (t.get("chg24") or 0) > 100),
-                        ("umur <12 jam saat dibeli", lambda t: (t.get("age_h") if t.get("age_h") is not None else 99) < 12)):
+                        ("umur <12 jam saat dibeli", lambda t: (t.get("age_h") if t.get("age_h") is not None else 99) < 12),
+                        ("volume >15x likuiditas saat dibeli", lambda t: (t.get("turnover") or 0) > 15)):
             a = [c for c in closed if c.get("tags") and f(c["tags"])]
             b = [c for c in closed if c.get("tags") and not f(c["tags"])]
             if len(a) >= 3 and len(b) >= 3:
@@ -699,6 +674,50 @@ def learning_report(pf, state):
     else:
         lines.append(f"Akurasi Perisai: baru {len(done)} koin ditolak yang selesai diamati (minimal 5).")
     return "\n".join(lines)
+
+
+# ==================== DATA UNTUK DASHBOARD ====================
+def update_dashboard(state, pf, n_cand, n_stage1, accepted, rejected, sim_lines):
+    """Tulis ringkasan ke state['dashboard'] dan catatan ke state['activity'] (dibaca index.html)."""
+    wib = datetime.now(timezone.utc) + timedelta(hours=7)
+    stamp = wib.strftime("%d/%m %H:%M")
+    plist, pos_value, floating = [], 0.0, 0.0
+    for addr, pos in pf["positions"].items():
+        last = pos.get("last_price", pos["entry_price"])
+        val = pos["tokens"] * last
+        pnl = val + pos["realized"] - pos["cost"]
+        pos_value += val
+        floating += pnl
+        plist.append({"sym": pos["symbol"], "cost": round(pos["cost"], 2), "value": round(val, 2),
+                      "pnl": round(pnl, 2), "pct": round(pnl / pos["cost"] * 100, 1) if pos["cost"] else 0,
+                      "age_h": round((time.time() - pos["opened_ts"]) / 3600, 1), "tp1": bool(pos.get("tp1_done"))})
+    equity = pf["cash"] + pos_value
+
+    act = state.setdefault("activity", [])
+    if n_stage1:
+        act.append({"t": stamp, "who": "Radar", "txt": f"{n_stage1} lolos saring awal dari {n_cand} koin"})
+    for _, _, _, p, _ in accepted:
+        act.append({"t": stamp, "who": "Perisai", "txt": f"LOLOS {p['baseToken'].get('symbol', '?')}"})
+    for sym, why in rejected:
+        act.append({"t": stamp, "who": "Perisai", "txt": f"TOLAK {sym}: " + (why[0] if why else "")[:80]})
+    for ln in sim_lines:
+        act.append({"t": stamp, "who": "Sigap", "txt": ln[:120]})
+    del act[:-MAX_ACTIVITY]
+
+    n_open = len(pf["positions"])
+    state["dashboard"] = {
+        "updated_at": wib.strftime("%H:%M") + " WIB",
+        "pnl_total": round(equity - pf["start"], 2),
+        "pnl_floating": round(floating, 2),
+        "open_positions_count": f"{n_open}/{MAX_OPEN_POSITIONS}",
+        "positions": plist,
+        "status_karyawan": {
+            "radar": f"Pindai {n_cand} koin, {n_stage1} lolos",
+            "perisai": (f"{len(accepted)} lolos, {len(rejected)} ditolak" if (accepted or rejected) else "Menunggu kandidat dari Radar"),
+            "sigap": f"Memantau {n_open} posisi" + (f", {len(sim_lines)} aksi" if sim_lines else ""),
+            "warta": f"Nilai ${equity:,.0f} ({(equity / pf['start'] - 1) * 100:+.1f}%)",
+        },
+    }
 
 
 def main():
@@ -743,6 +762,11 @@ def main():
             print(f"{base.get('symbol', '?')}: gagal dicek, dicoba lagi putaran berikutnya")
             continue
         checked.append(base["address"])
+        liq_ = (p.get("liquidity") or {}).get("usd") or 0
+        vol_ = (p.get("volume") or {}).get("h24") or 0
+        if liq_ and vol_ / liq_ > MAX_TURNOVER:
+            an["ok"] = False
+            an["reject"] = list(an["reject"]) + [f"volume {vol_ / liq_:.0f}x likuiditas (batas {MAX_TURNOVER}x), rawan volume palsu"]
         if an["ok"]:
             accepted.append((score * (1 - an["risk"] / 100), score, warns, p, an))
         else:
@@ -806,6 +830,7 @@ def main():
 
     for addr in checked:
         seen.add(addr)
+    update_dashboard(state, pf, len(candidates), len(stage1), accepted, rejected, sim_lines)
     state["seen"] = list(seen)
     save_state(state)
 

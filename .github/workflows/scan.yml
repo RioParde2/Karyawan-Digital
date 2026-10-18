@@ -1,4 +1,4 @@
-name: Karyawan Digital
+Name: Karyawan Digital
 
 on:
   schedule:
@@ -8,19 +8,27 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: karyawan-digital
-  cancel-in-progress: false
-
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip' # Menghemat waktu jika scanner.py menggunakan library eksternal (requests, dll)
+
+      - name: Install Dependencies (Jika ada)
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
       - name: Jalankan pemindai
         run: python scanner.py
@@ -28,9 +36,20 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      - name: Simpan riwayat
+      - name: Simpan dan Sinkronkan Riwayat
         run: |
-          git config user.name "karyawan-digital"
-          git config user.email "bot@users.noreply.github.com"
+          git config user.name "karyawan-digital[bot]"
+          git config user.email "karyawan-digital[bot]@users.noreply.github.com"
+          
           git add seen.json
-          git diff --cached --quiet || (git commit -m "update riwayat" && git push)
+          
+          # Cek apakah ada perubahan
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan pada riwayat."
+          else
+            git commit -m "chore: update riwayat pemindaian [skip ci]"
+            
+            # Mekanisme pull --rebase untuk menghindari konflik jika ada update paralel
+            git pull --rebase origin main || git pull --rebase origin master
+            git push
+          fi

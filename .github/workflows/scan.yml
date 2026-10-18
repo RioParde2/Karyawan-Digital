@@ -1,4 +1,4 @@
-Name: Karyawan Digital
+name: Karyawan Digital
 
 on:
   schedule:
@@ -22,10 +22,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: 'pip' # Menghemat waktu jika scanner.py menggunakan library eksternal (requests, dll)
+          cache: 'pip'
 
-      - name: Install Dependencies (Jika ada)
+      - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
@@ -43,13 +44,10 @@ jobs:
           
           git add seen.json
           
-          # Cek apakah ada perubahan
           if git diff --cached --quiet; then
             echo "Tidak ada perubahan pada riwayat."
           else
             git commit -m "chore: update riwayat pemindaian [skip ci]"
-            
-            # Mekanisme pull --rebase untuk menghindari konflik jika ada update paralel
             git pull --rebase origin main || git pull --rebase origin master
             git push
           fi

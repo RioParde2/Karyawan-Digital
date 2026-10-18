@@ -1,20 +1,22 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 3.0)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 3.2)
 
-Karyawan 1 - PENCARI: mencari koin baru/trending dari DexScreener (gratis).
-Karyawan 2 - PENILAI RISIKO (manajer risiko & satpam): mengecek ulang tiap
+Karyawan 1 - DJIWA RADAR (Pencari): mencari koin baru/trending dari DexScreener (gratis).
+Karyawan 2 - DJIWA PERISAI (Penilai Risiko, manajer risiko & satpam): mengecek ulang tiap
              kandidat Solana lewat RugCheck (gratis, tanpa API key) dengan
              aturan disiplin yang ketat dan skeptis. Gagal satu aturan = REJECT.
-Karyawan 4 - PELAPOR: mengirim ringkasan ke Telegram.
-Karyawan 3 - EKSEKUTOR (SIMULASI): trading uang pura-pura dengan aturan baku.
+Karyawan 4 - DJIWA WARTA (Penyusun & Pelapor): mengirim ringkasan ke Telegram.
+Karyawan 3 - DJIWA SIGAP (Eksekutor SIMULASI): trading uang pura-pura dengan aturan baku.
              Tidak ada dompet, tidak ada uang sungguhan. Data harga asli DexScreener.
 
 Kamu sendiri yang menganalisa dan menentukan entry/exit.
 BUKAN saran keuangan. Tidak ada jaminan profit.
 """
+import html
 import json
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 import urllib.parse
@@ -318,6 +320,19 @@ def analyze_risk(mint):
     }
 
 
+# ==================== NAMA KARYAWAN & OBROLAN TIM ====================
+RADAR = "🛰️ Djiwa Radar"
+PERISAI = "🛡️ Djiwa Perisai"
+SIGAP = "⚙️ Djiwa Sigap"
+WARTA = "📰 Djiwa Warta"
+
+
+def say(who, body):
+    """Kirim satu pesan sebagai karyawan tertentu, dengan jeda agar terbaca seperti obrolan tim."""
+    send_telegram(f"<b>{who}</b>\n{html.escape(body)}", use_html=True)
+    time.sleep(1.5)
+
+
 # ==================== KARYAWAN 4: PELAPOR ====================
 def fmt(p, score, warnings, an):
     base = p.get("baseToken") or {}
@@ -352,16 +367,17 @@ def fmt(p, score, warnings, an):
     return "\n".join(lines)
 
 
-def send_telegram(text):
+def send_telegram(text, use_html=False):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         print("(Telegram belum diatur - hasil dicetak di sini)\n")
-        print(text)
+        print(re.sub(r"</?b>", "", html.unescape(text)) if use_html else text)
         return
-    data = urllib.parse.urlencode(
-        {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": "true"}
-    ).encode()
+    payload = {"chat_id": chat_id, "text": text[:4000], "disable_web_page_preview": "true"}
+    if use_html:
+        payload["parse_mode"] = "HTML"
+    data = urllib.parse.urlencode(payload).encode()
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/sendMessage", data=data
     )
@@ -596,32 +612,42 @@ def main():
     for ln in sim_lines:
         print("  SIMULASI:", ln)
 
-    # Karyawan 4: laporan
+    # Karyawan 4: obrolan tim di Telegram (Radar -> Perisai -> Sigap -> Warta)
     manual = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch") == "workflow_dispatch"
-    daily = datetime.now(timezone.utc).hour < 3
-    parts = []
-    if accepted or rejected:
-        header = "Laporan Djiwa Crypto Labs (bukan saran keuangan, cek sendiri sebelum entry)\n"
-        body = "\n\n".join(fmt(p, sc, w, an) for _, sc, w, p, an in accepted)
-        if not accepted:
-            body = "Tidak ada kandidat yang lolos Manajer Risiko putaran ini."
-        if rejected:
-            body += f"\n\nDitolak Manajer Risiko ({len(rejected)}):"
-            for sym, why in rejected[:8]:
-                body += f"\n- {sym}: " + "; ".join(why[:2])
-        parts.append(header + "\n" + body)
-    if sim_lines:
-        parts.append("[SIMULASI] Uang pura-pura, bukan transaksi sungguhan\n" + "\n".join(sim_lines))
-    if manual or daily:
-        if not parts:
-            parts.append(
-                "Djiwa Crypto Labs: karyawan digital aktif, tidak ada kandidat baru.\n"
-                f"Kandidat awal {len(candidates)} | data pair {len(pairs)} | lolos saring awal {len(stage1)}\n"
-                f"Tersaring: {funnel_text}"
-            )
-        parts.append(portfolio_summary(pf))
-    for part in parts:
-        send_telegram(part)
+    daily = state.get("last_daily") != _today()  # kabar harian: sekali per hari (UTC)
+    activity = bool(stage1 or accepted or rejected or sim_lines)
+    if activity or manual or daily:
+        state["last_daily"] = _today()
+        # 1. Radar melapor temuan
+        if stage1:
+            names = ", ".join(p["baseToken"].get("symbol", "?") for _, _, p in stage1)
+            say(RADAR, f"Saya pindai {len(candidates)} koin Solana. {len(stage1)} lolos saring awal: {names}. "
+                       "Perisai, tolong periksa ulang dengan ketat.")
+        elif manual or daily:
+            say(RADAR, f"Saya pindai {len(candidates)} koin Solana, belum ada yang lolos saring awal. "
+                       f"Tersaring: {funnel_text}.")
+        # 2. Perisai memeriksa
+        if accepted or rejected:
+            total = len(accepted) + len(rejected)
+            msg = f"Saya periksa {total} kandidat: {len(accepted)} lolos, {len(rejected)} ditolak."
+            if rejected:
+                msg += "\n\nDitolak:"
+                for sym, why in rejected[:8]:
+                    msg += f"\n- {sym}: " + "; ".join(why[:2])
+            msg += ("\n\nYang lolos saya teruskan ke Sigap." if accepted
+                    else "\n\nTidak ada yang lolos, Sigap tidak perlu bergerak.")
+            say(PERISAI, msg)
+            for _, sc, w, p, an in accepted:
+                say(PERISAI, fmt(p, sc, w, an))
+        # 3. Sigap menjalankan simulasi
+        if sim_lines:
+            say(SIGAP, "Menjalankan aturan baku (simulasi, uang pura-pura):\n" + "\n".join(sim_lines))
+        # 4. Warta menutup dengan ringkasan
+        buys = sum(1 for ln in sim_lines if ln.startswith("BELI"))
+        sells = sum(1 for ln in sim_lines if ln.startswith("JUAL"))
+        summary = portfolio_summary(pf).split("\n", 1)[1]
+        say(WARTA, f"Laporan akhir putaran ini: {len(stage1)} lolos saring awal, {len(accepted)} lolos Perisai, "
+                   f"{buys} beli dan {sells} jual simulasi.\n{summary}\nBukan saran keuangan, cek sendiri sebelum bertindak.")
 
     for addr in checked:
         seen.add(addr)

@@ -16,6 +16,7 @@
     "6o2oeMWR9GeEm5acoi793f1XUQp4uoCcMBrw2mZopump",
     "7NPvxgxdDKgTHSzcWoV5mCp5opNA4uTpzrPynXDXpump",
     "7fumw7GYTHZJJxkKJ8sSh1CqTdHmB234vX3xsKjepump",
+    "7iYM9cjpKKNyLvJfq4pYyjubk83dnqxtPDrRdf77pump",
     "8QtbrC9d3BezyCwzBFUQbNsWJGte7ckrZ7HWcn81pump",
     "8Xg89xT8Ve34sKiYqYuMs46mycREsCA2F362UscRpump",
     "9KDhovVA2kdjngkFooqEn5FoKkuZeDMYiQtVk7Lbm9up",
@@ -45,7 +46,7 @@
   ],
   "portfolio": {
     "start": 1000,
-    "cash": 899.6802247668344,
+    "cash": 849.6802247668344,
     "positions": {
       "kpw3mRFBxzWFcQiLjPE1AXM6bSQhwFoUY8WQAKbpump": {
         "symbol": "WAITIE",
@@ -56,7 +57,7 @@
         "entry_price": 9.492212351040554e-05,
         "entry_liq": 25100.41,
         "peak": 0.0001622,
-        "last_price": 0.0001562,
+        "last_price": 0.0001593,
         "tp1_done": true,
         "opened_ts": 1792157994.6361234,
         "misses": 0
@@ -70,10 +71,33 @@
         "entry_price": 0.00011697670459051309,
         "entry_liq": 28358.16,
         "peak": 0.0001329,
-        "last_price": 0.0001117,
+        "last_price": 0.0001303,
         "tp1_done": false,
         "opened_ts": 1792240626.7045832,
         "misses": 0
+      },
+      "7iYM9cjpKKNyLvJfq4pYyjubk83dnqxtPDrRdf77pump": {
+        "symbol": "iMolest ",
+        "url": "https://dexscreener.com/solana/do8mgcnen6ydyeauytntt9q7xdxmsjksvbzx2ehhgrzk",
+        "tokens": 628627.0518654059,
+        "cost": 50,
+        "realized": 0.0,
+        "entry_price": 7.953841606343312e-05,
+        "entry_liq": 24276.24,
+        "peak": 7.842e-05,
+        "last_price": 7.842e-05,
+        "tp1_done": false,
+        "opened_ts": 1792309955.0077724,
+        "misses": 0,
+        "tags": {
+          "age_h": 9.2,
+          "chg24": 67.64,
+          "turnover": 46.6,
+          "liq": 24276,
+          "risk": 0,
+          "security": 99,
+          "score": 7.7
+        }
       }
     },
     "closed": [
@@ -214,12 +238,12 @@
     }
   ],
   "dashboard": {
-    "updated_at": "06:10:33 UTC",
-    "pnl_total": -11.44,
-    "pnl_floating": 13.88,
-    "open_positions_count": "2/5",
-    "equity": 988.56,
-    "cash": 899.68,
+    "updated_at": "07:52:45 UTC",
+    "pnl_total": -3.37,
+    "pnl_floating": 21.95,
+    "open_positions_count": "3/5",
+    "equity": 996.63,
+    "cash": 849.68,
     "status_karyawan": {
       "radar": "Sedang bersiap memindai pasar...",
       "perisai": "Menunggu kandidat dari Radar...",

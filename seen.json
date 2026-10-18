@@ -17,6 +17,7 @@
     "5e8GPzhqxLKFVU6gb87aJLZMoSQnbjBhQupXvCCZpump",
     "5x6QQvpRpd1PsFTTTJe6sJFFSqrA21H1j3GZLmo2pump",
     "6o2oeMWR9GeEm5acoi793f1XUQp4uoCcMBrw2mZopump",
+    "6yMZv1NgnQWBeocyfCNKmdqGr3Enu3Lrdpz3TJRvpump",
     "7NPvxgxdDKgTHSzcWoV5mCp5opNA4uTpzrPynXDXpump",
     "7fumw7GYTHZJJxkKJ8sSh1CqTdHmB234vX3xsKjepump",
     "7iYM9cjpKKNyLvJfq4pYyjubk83dnqxtPDrRdf77pump",
@@ -42,6 +43,7 @@
     "Fak3rJEBfR4Vb8DoFpecf6yoxbkkr1gGUH5tdj2rpump",
     "FhTRVAkQeiaLRJHYc13DBNhgw9N8ZPacvonaKfXxpump",
     "GetLnVcK3csLW6aTb5mBTHaw9V4vN3fx9oMWQrQxpump",
+    "GoLdZWYNg9jg4z5SGCLJx69xag2vMjLaSQK5S7TUGoLd",
     "H2pkmDKUio79yzzj5cRF6fqf6Xeq6AmpTsVVGG9wpump",
     "kpw3mRFBxzWFcQiLjPE1AXM6bSQhwFoUY8WQAKbpump",
     "nPD9vif19C2oY1jhHRrAJSSpMu9tJQtibfxoZ4qcxph",
@@ -49,8 +51,32 @@
   ],
   "portfolio": {
     "start": 1000,
-    "cash": 955.6076807917899,
-    "positions": {},
+    "cash": 905.6076807917899,
+    "positions": {
+      "GoLdZWYNg9jg4z5SGCLJx69xag2vMjLaSQK5S7TUGoLd": {
+        "symbol": "Gold",
+        "url": "https://dexscreener.com/solana/djbrnsdafbdsmxu5mjlvx73pzbyccweuzfwcug9dnezx",
+        "tokens": 570539.8845839142,
+        "cost": 50,
+        "realized": 0.0,
+        "entry_price": 8.763629213488592e-05,
+        "entry_liq": 25422.94,
+        "peak": 8.642e-05,
+        "last_price": 8.642e-05,
+        "tp1_done": false,
+        "opened_ts": 1792349354.1156027,
+        "misses": 0,
+        "tags": {
+          "age_h": 5.2,
+          "chg24": 86.56,
+          "turnover": 28.3,
+          "liq": 25423,
+          "risk": 0,
+          "security": 99,
+          "score": 16.9
+        }
+      }
+    },
     "closed": [
       {
         "symbol": "Starman",
@@ -249,15 +275,23 @@
       "ts": 1792340692.765745,
       "why": "jaringan insider memegang sekitar 21.8% pasokan (batas 5%)",
       "done": false
+    },
+    {
+      "sym": "CATONICE",
+      "addr": "6yMZv1NgnQWBeocyfCNKmdqGr3Enu3Lrdpz3TJRvpump",
+      "price": 0.001307,
+      "ts": 1792349354.1155095,
+      "why": "jaringan insider memegang sekitar 41.8% pasokan (batas 5%)",
+      "done": false
     }
   ],
   "dashboard": {
-    "updated_at": "16:25:01 UTC",
-    "pnl_total": -44.39,
-    "pnl_floating": 0,
-    "open_positions_count": "0/5",
-    "equity": 955.61,
-    "cash": 955.61,
+    "updated_at": "18:49:24 UTC",
+    "pnl_total": -45.09,
+    "pnl_floating": -0.69,
+    "open_positions_count": "1/5",
+    "equity": 954.91,
+    "cash": 905.61,
     "status_karyawan": {
       "radar": "Sedang bersiap memindai pasar...",
       "perisai": "Menunggu kandidat dari Radar...",

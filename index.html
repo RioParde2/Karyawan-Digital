@@ -44,8 +44,8 @@
     background: url('office_bg.jpg') center center / contain no-repeat;
 }
 
-/* Balon Obrolan Karyawan */
-.bubble { 
+/* Balon Obrolan Karyawan Atas (Ekor di Bawah) */
+#msg-radar, #msg-perisai {
     position: absolute; 
     background: rgba(255, 255, 255, 0.95); 
     color: #0f172a; 
@@ -58,7 +58,7 @@
     z-index: 10;
     pointer-events: none;
 }
-.bubble::after { 
+#msg-radar::after, #msg-perisai::after { 
     content: ''; 
     position: absolute; 
     bottom: -3px; 
@@ -69,11 +69,38 @@
     border-color: rgba(255, 255, 255, 0.95) transparent; 
 }
 
-/* Koordinat Pasti di Atas Ke-4 Meja Karakter */
-#msg-radar { top: 12%; left: 18%; }
-#msg-perisai { top: 12%; right: 18%; }
-#msg-sigap { bottom: 12%; left: 18%; }
-#msg-warta { bottom: 12%; right: 18%; }
+/* Balon Obrolan Karyawan Bawah (Ditaruh di Bawah Meja & Ekor Menghadap ke Atas) */
+#msg-sigap, #msg-warta {
+    position: absolute; 
+    background: rgba(255, 255, 255, 0.95); 
+    color: #0f172a; 
+    font-size: 8px; 
+    font-weight: bold; 
+    padding: 3px 6px; 
+    border-radius: 6px; 
+    white-space: nowrap; 
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5); 
+    z-index: 10;
+    pointer-events: none;
+}
+#msg-sigap::after, #msg-warta::after { 
+    content: ''; 
+    position: absolute; 
+    top: -3px; /* Panah pindah ke atas */
+    left: 50%; 
+    transform: translateX(-50%); 
+    border-width: 0 3px 3px; /* Membalik arah segitiga panah */
+    border-style: solid; 
+    border-color: transparent transparent rgba(255, 255, 255, 0.95); 
+}
+
+/* Posisi Koordinat Presisi */
+#msg-radar { top: 30%; left: 18%; }
+#msg-perisai { top: 30%; right: 18%; }
+
+/* Posisi bawah ditaruh tepat di bawah area meja karakter bawah */
+#msg-sigap { bottom: 8%; left: 18%; }
+#msg-warta { bottom: 8%; right: 18%; }
 
         /* Navigation Bar Bawah */
         .nav-bar { display: flex; justify-content: space-around; padding: 12px; background: #1e213d; border-top: 1px solid #2d3159; }

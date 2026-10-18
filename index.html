@@ -23,7 +23,7 @@
         .metric-value { font-size: 14px; font-weight: bold; }
         .val-green { color: #10b981; }
 
-/* Ruang Kantor Virtual (Menyesuaikan Proporsi Gambar) */
+/* Ruang Kantor Virtual */
 .office-room { 
     flex: 1; 
     position: relative; 
@@ -35,36 +35,36 @@
     overflow: hidden;
 }
 
-/* Balon Obrolan Karyawan (Tampil Penuh & Rapi) */
+/* Balon Obrolan Karyawan */
 .bubble { 
     position: absolute; 
     background: rgba(255, 255, 255, 0.95); 
     color: #0f172a; 
-    font-size: 9px; 
+    font-size: 8px; 
     font-weight: bold; 
-    padding: 4px 8px; 
-    border-radius: 8px; 
+    padding: 3px 6px; 
+    border-radius: 6px; 
     white-space: nowrap; 
-    box-shadow: 0 4px 10px rgba(0,0,0,0.5); 
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5); 
     z-index: 10;
     pointer-events: none;
 }
 .bubble::after { 
     content: ''; 
     position: absolute; 
-    bottom: -4px; 
+    bottom: -3px; 
     left: 50%; 
     transform: translateX(-50%); 
-    border-width: 4px 4px 0; 
+    border-width: 3px 3px 0; 
     border-style: solid; 
     border-color: rgba(255, 255, 255, 0.95) transparent; 
 }
 
-/* Posisi Balon Obrolan yang Pas Tepat di Atas Meja Masing-masing Karyawan */
-#msg-radar { top: 20%; left: 12%; }
-#msg-perisai { top: 20%; right: 12%; }
-#msg-sigap { bottom: 20%; left: 12%; }
-#msg-warta { bottom: 20%; right: 12%; }
+/* Posisi Tepat di Atas Masing-masing Meja dalam Gambar */
+#msg-radar { top: 32%; left: 18%; }
+#msg-perisai { top: 32%; right: 18%; }
+#msg-sigap { bottom: 22%; left: 18%; }
+#msg-warta { bottom: 22%; right: 18%; }
 
         /* Navigation Bar Bawah */
         .nav-bar { display: flex; justify-content: space-around; padding: 12px; background: #1e213d; border-top: 1px solid #2d3159; }

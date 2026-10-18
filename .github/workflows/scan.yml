@@ -1,16 +1,36 @@
-  - uses: actions/setup-python@v5
-    with:
-      python-version: "3.12"
+name: Karyawan Digital
 
-  - name: Jalankan pemindai
-    run: python scanner.py
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
-  - name: Simpan riwayat
-    run: |
-      git config user.name "karyawan-digital"
-      git config user.email "bot@users.noreply.github.com"
-      git add seen.json
-      git diff --cached --quiet || (git commit -m "update riwayat" && git push)
+permissions:
+  contents: write
+
+concurrency:
+  group: karyawan-digital
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Jalankan pemindai
+        run: python scanner.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Simpan riwayat
+        run: |
+          git config user.name "karyawan-digital"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || (git commit -m "update riwayat" && git push)

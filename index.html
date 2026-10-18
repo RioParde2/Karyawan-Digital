@@ -35,7 +35,7 @@
     overflow: hidden;
 }
 
-/* Balon Obrolan Karyawan (Dibuat Lebih Ringkas) */
+/* Balon Obrolan Karyawan (Tampil Penuh & Rapi) */
 .bubble { 
     position: absolute; 
     background: rgba(255, 255, 255, 0.95); 
@@ -45,9 +45,6 @@
     padding: 4px 8px; 
     border-radius: 8px; 
     white-space: nowrap; 
-    max-width: 110px;
-    overflow: hidden;
-    text-overflow: ellipsis;
     box-shadow: 0 4px 10px rgba(0,0,0,0.5); 
     z-index: 10;
     pointer-events: none;
@@ -63,11 +60,11 @@
     border-color: rgba(255, 255, 255, 0.95) transparent; 
 }
 
-/* Penyesuaian Koordinat Posisi Balon Agar Pas di Atas Setiap Meja */
-#msg-radar { top: 12%; left: 8%; }
-#msg-perisai { top: 12%; right: 8%; }
-#msg-sigap { bottom: 20%; left: 8%; }
-#msg-warta { bottom: 20%; right: 8%; }
+/* Sesuaikan posisi agar pas tepat melayang di atas meja masing-masing karakter */
+#msg-radar { top: 28%; left: 22%; }
+#msg-perisai { top: 28%; right: 22%; }
+#msg-sigap { bottom: 32%; left: 22%; }
+#msg-warta { bottom: 32%; right: 22%; }
 
         /* Navigation Bar Bawah */
         .nav-bar { display: flex; justify-content: space-around; padding: 12px; background: #1e213d; border-top: 1px solid #2d3159; }

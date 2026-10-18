@@ -1,5 +1,5 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 3.2)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 3.3)
 
 Karyawan 1 - DJIWA RADAR (Pencari): mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - DJIWA PERISAI (Penilai Risiko, manajer risiko & satpam): mengecek ulang tiap
@@ -56,6 +56,12 @@ MAX_HOLD_HOURS = 48             # jual jika lewat 48 jam
 DAILY_LOSS_LIMIT_PCT = 5        # rugi bersih harian 5% modal -> stop beli sampai besok (UTC)
 LIQ_COLLAPSE_PCT = 50           # jual jika likuiditas anjlok lebih dari 50% (tanda rug)
 FEE_PCT = 1.0                   # biaya per transaksi (fee DEX + biaya lain), konservatif
+STRICT_INSIDER_UNKNOWN = True    # jaringan insider yang porsinya tidak bisa dipastikan = REJECT
+MAX_ENTRY_CHANGE_PCT = 300      # Sigap tidak membeli koin yang sudah naik >300% dalam 24 jam
+MIN_ENTRY_CHANGE_PCT = -30      # ...dan tidak menangkap pisau jatuh (turun >30% dalam 24 jam)
+SHADOW_HOURS = 24               # koin yang ditolak diamati sekian jam untuk menguji akurasi Perisai
+SHADOW_MAX = 150
+MIN_TRADES_FOR_REVIEW = 10      # penilaian strategi dimulai setelah sekian trade selesai
 MAX_MISSES = 3                  # data harga hilang 3 putaran berturut-turut = dianggap rug
 DEBUG = True                    # cetak contoh data mentah di log (untuk verifikasi)
 # ====================================================================
@@ -207,6 +213,21 @@ def _main_market_lp_locked(r):
     return best_pct
 
 
+def _insider_network_pct(r, nets):
+    """Perkirakan % pasokan yang dipegang jaringan insider. None jika tidak bisa dihitung.
+    Satuan jumlah token dari RugCheck belum pasti (mentah atau sudah dibagi desimal),
+    jadi dicoba keduanya dan diambil yang paling besar (sikap skeptis)."""
+    tok = r.get("token") or {}
+    supply, dec = tok.get("supply"), tok.get("decimals") or 0
+    if not supply:
+        return None
+    total = sum(n.get("tokenAmount") for n in nets if isinstance(n.get("tokenAmount"), (int, float)) and n.get("tokenAmount") > 0)
+    if not total:
+        return None
+    shares = [x for x in (total / supply * 100, total / (supply / (10 ** dec)) * 100) if 0 <= x <= 100]
+    return max(shares) if shares else None
+
+
 def analyze_risk(mint):
     """
     Manajer risiko yang skeptis. Kembalikan dict, atau None jika data tidak bisa diambil.
@@ -286,9 +307,20 @@ def analyze_risk(mint):
             reject.append(f"{cnt} dompet berjumlah identik ({val:.2f}% masing-masing, total {val * cnt:.1f}%): ciri dompet kembar")
 
     nets = r.get("insiderNetworks") or []
-    if nets and insider_pct == 0 and twin_pct == 0:
-        risk = min(risk + 15, 100)
-        reasons.append("jaringan insider terdeteksi RugCheck (porsi tidak terhitung)")
+    net_pct = 0.0
+    if nets:
+        net_pct = _insider_network_pct(r, nets)
+        if net_pct is None:
+            if STRICT_INSIDER_UNKNOWN:
+                reject.append("jaringan insider terdeteksi RugCheck dan porsinya tidak bisa dipastikan (ditolak demi keamanan)")
+            else:
+                risk = min(risk + 15, 100)
+                reasons.append("jaringan insider terdeteksi RugCheck (porsi tidak terhitung)")
+            net_pct = 0.0
+        elif net_pct > MAX_INSIDER_PCT:
+            reject.append(f"jaringan insider memegang sekitar {net_pct:.1f}% pasokan (batas {MAX_INSIDER_PCT}%)")
+        else:
+            reasons.append(f"jaringan insider kecil (~{net_pct:.1f}% pasokan)")
 
     # --- ATURAN 3: skor keamanan kontrak minimal 90% ---
     sn = r.get("score_normalised")
@@ -315,7 +347,7 @@ def analyze_risk(mint):
             "holders": r.get("totalHolders"),
             "top_wallet": top_wallet,
             "security": security,
-            "insider": max(insider_pct, twin_pct),
+            "insider": max(insider_pct, twin_pct, net_pct),
         },
     }
 
@@ -413,7 +445,7 @@ def paper_close(pf, addr, pos, reason):
         "symbol": pos["symbol"], "addr": addr, "cost": round(pos["cost"], 2),
         "proceeds": round(pos["realized"], 2), "pnl": round(pnl, 2),
         "pct": round(pct, 1), "reason": reason, "day": _today(),
-        "opened_ts": pos["opened_ts"], "closed_ts": time.time(),
+        "opened_ts": pos["opened_ts"], "closed_ts": time.time(), "tags": pos.get("tags", {}),
     })
     pf["closed"] = pf["closed"][-300:]
     del pf["positions"][addr]
@@ -483,7 +515,7 @@ def paper_enter(pf, accepted):
     if daily_halted(pf):
         return [f"Batas rugi harian {DAILY_LOSS_LIMIT_PCT}% tercapai: tidak membuka posisi baru sampai besok (UTC)."]
     lines = []
-    for _, _, _, p, _ in accepted:
+    for _, sc, _w, p, an in accepted:
         base = p["baseToken"]
         addr = base["address"]
         if addr in pf["positions"]:
@@ -499,7 +531,16 @@ def paper_enter(pf, accepted):
             price = float(p["priceUsd"])
         except (TypeError, ValueError, KeyError):
             continue
+        chg = (p.get("priceChange") or {}).get("h24")
+        if isinstance(chg, (int, float)):
+            if chg > MAX_ENTRY_CHANGE_PCT:
+                lines.append(f"Lewati {base.get('symbol', '?')}: sudah naik {chg:.0f}% dalam 24 jam (saya tidak mengejar pucuk).")
+                continue
+            if chg < MIN_ENTRY_CHANGE_PCT:
+                lines.append(f"Lewati {base.get('symbol', '?')}: turun {chg:.0f}% dalam 24 jam (saya tidak menangkap pisau jatuh).")
+                continue
         liq = (p.get("liquidity") or {}).get("usd") or 0
+        vol = (p.get("volume") or {}).get("h24") or 0
         slip = _slip(amount, liq)
         tokens = (amount * (1 - FEE_PCT / 100)) / (price * (1 + slip))
         pf["cash"] -= amount
@@ -509,6 +550,12 @@ def paper_enter(pf, accepted):
             "entry_price": amount / tokens, "entry_liq": liq,
             "peak": price, "last_price": price, "tp1_done": False,
             "opened_ts": time.time(), "misses": 0,
+            "tags": {
+                "age_h": round((time.time() * 1000 - (p.get("pairCreatedAt") or 0)) / 3_600_000, 1),
+                "chg24": chg, "turnover": round(vol / liq, 1) if liq else None, "liq": round(liq),
+                "risk": an["risk"] if an else None, "security": (an["facts"].get("security") if an else None),
+                "score": round(sc, 1),
+            },
         }
         lines.append(
             f"BELI {base.get('symbol', '?')}: ${amount:.0f} @ ${price:.8f} (geseran ~{slip * 100:.1f}% + fee {FEE_PCT}%) | "
@@ -546,12 +593,84 @@ def load_state():
     pf.setdefault("cash", pf["start"])
     pf.setdefault("positions", {})
     pf.setdefault("closed", [])
+    raw.setdefault("shadow", [])
     return raw
 
 
 def save_state(state):
     state["seen"] = sorted(set(state["seen"]))[-2000:]
     SEEN_FILE.write_text(json.dumps(state))
+
+
+# ==================== BELAJAR DARI DATA ====================
+def shadow_add(state, p, reasons):
+    """Catat koin yang ditolak Perisai untuk diamati: apakah penolakan itu tepat?"""
+    sh = state.setdefault("shadow", [])
+    base = p["baseToken"]
+    try:
+        price = float(p["priceUsd"])
+    except (TypeError, ValueError, KeyError):
+        return
+    if any(x["addr"] == base["address"] for x in sh):
+        return
+    sh.append({"sym": base.get("symbol", "?"), "addr": base["address"], "price": price,
+               "ts": time.time(), "why": (reasons[0] if reasons else "")[:60], "done": False})
+
+
+def shadow_update(state):
+    sh = state.setdefault("shadow", [])
+    pending = [x for x in sh if not x["done"] and time.time() - x["ts"] >= SHADOW_HOURS * 3600][:60]
+    if pending:
+        pairs = fetch_best_pairs([("solana", x["addr"]) for x in pending])
+        by = {(q.get("baseToken") or {}).get("address"): q for q in pairs}
+        for x in pending:
+            q = by.get(x["addr"])
+            try:
+                now = float(q["priceUsd"]) if q and q.get("priceUsd") else None
+            except (TypeError, ValueError):
+                now = None
+            if now is None:
+                x["result"], x["chg"] = "hilang", None
+            else:
+                chg = (now / x["price"] - 1) * 100 if x["price"] else 0
+                x["chg"] = round(chg, 1)
+                x["result"] = "rontok" if chg <= -50 else "naik" if chg >= 50 else "datar"
+            x["done"] = True
+    if len(sh) > SHADOW_MAX:
+        sh.sort(key=lambda x: x["ts"])
+        del sh[: len(sh) - SHADOW_MAX]
+
+
+def learning_report(pf, state):
+    lines = []
+    closed = [c for c in pf["closed"] if "pnl" in c]
+    if len(closed) >= MIN_TRADES_FOR_REVIEW:
+        n = len(closed)
+        wins = [c["pct"] for c in closed if c["pnl"] > 0]
+        losses = [c["pct"] for c in closed if c["pnl"] <= 0]
+        avg_w = sum(wins) / len(wins) if wins else 0
+        avg_l = sum(losses) / len(losses) if losses else 0
+        exp = sum(c["pnl"] for c in closed) / n
+        lines.append(f"Trade: {n} selesai, menang {len(wins)} ({len(wins) / n * 100:.0f}%). Rata-rata menang {avg_w:+.0f}%, "
+                     f"rata-rata kalah {avg_l:+.0f}%, hasil rata-rata ${exp:+.2f} per trade.")
+        for name, f in (("naik 24j >100% saat dibeli", lambda t: (t.get("chg24") or 0) > 100),
+                        ("umur <12 jam saat dibeli", lambda t: (t.get("age_h") if t.get("age_h") is not None else 99) < 12)):
+            a = [c for c in closed if c.get("tags") and f(c["tags"])]
+            b = [c for c in closed if c.get("tags") and not f(c["tags"])]
+            if len(a) >= 3 and len(b) >= 3:
+                lines.append(f"- {name}: menang {sum(1 for c in a if c['pnl'] > 0)}/{len(a)}, "
+                             f"sisanya {sum(1 for c in b if c['pnl'] > 0)}/{len(b)}")
+    else:
+        lines.append(f"Trade: {len(closed)} selesai (penilaian strategi mulai setelah {MIN_TRADES_FOR_REVIEW} trade).")
+    done = [x for x in state.get("shadow", []) if x.get("done")]
+    if len(done) >= 5:
+        right = sum(1 for x in done if x["result"] in ("rontok", "hilang"))
+        miss = sum(1 for x in done if x["result"] == "naik")
+        lines.append(f"Akurasi Perisai: dari {len(done)} koin ditolak (diamati {SHADOW_HOURS} jam), {right} rontok/hilang (penolakan tepat), "
+                     f"{miss} naik >50% (terlewat), {len(done) - right - miss} datar.")
+    else:
+        lines.append(f"Akurasi Perisai: baru {len(done)} koin ditolak yang selesai diamati (minimal 5).")
+    return "\n".join(lines)
 
 
 def main():
@@ -587,7 +706,7 @@ def main():
     print(f"Lolos saring awal (akan dicek manajer risiko): {len(stage1)}")
 
     # Karyawan 2: manajer risiko (skeptis: tidak bisa diverifikasi = tidak dilaporkan)
-    accepted, rejected, checked = [], [], []
+    accepted, rejected, checked, rejected_p = [], [], [], []
     for score, warns, p in stage1:
         base = p["baseToken"]
         an = analyze_risk(base["address"])
@@ -600,11 +719,17 @@ def main():
             accepted.append((score * (1 - an["risk"] / 100), score, warns, p, an))
         else:
             rejected.append((base.get("symbol", "?"), an["reject"]))
+            rejected_p.append((p, an["reject"]))
     accepted.sort(key=lambda x: x[0], reverse=True)
     accepted = accepted[:MAX_RESULTS]
     print(f"LOLOS: {len(accepted)} | REJECT: {len(rejected)}")
     for sym, why in rejected:
         print(f"  REJECT {sym}: {'; '.join(why)}")
+
+    # Belajar dari data: catat koin yang ditolak, lalu periksa hasil pengamatan lama
+    for p_, why_ in rejected_p:
+        shadow_add(state, p_, why_)
+    shadow_update(state)
 
     # Karyawan 3: eksekutor simulasi (jual dulu, baru beli)
     sim_lines = paper_exits(pf)
@@ -646,8 +771,10 @@ def main():
         buys = sum(1 for ln in sim_lines if ln.startswith("BELI"))
         sells = sum(1 for ln in sim_lines if ln.startswith("JUAL"))
         summary = portfolio_summary(pf).split("\n", 1)[1]
+        extra = ("\n\nRapor belajar:\n" + learning_report(pf, state)) if (manual or daily) else ""
         say(WARTA, f"Laporan akhir putaran ini: {len(stage1)} lolos saring awal, {len(accepted)} lolos Perisai, "
-                   f"{buys} beli dan {sells} jual simulasi.\n{summary}\nBukan saran keuangan, cek sendiri sebelum bertindak.")
+                   f"{buys} beli dan {sells} jual simulasi.\n{summary}{extra}\n"
+                   "Bukan saran keuangan, cek sendiri sebelum bertindak.")
 
     for addr in checked:
         seen.add(addr)

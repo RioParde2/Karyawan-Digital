@@ -23,6 +23,7 @@
     "7iYM9cjpKKNyLvJfq4pYyjubk83dnqxtPDrRdf77pump",
     "8QtbrC9d3BezyCwzBFUQbNsWJGte7ckrZ7HWcn81pump",
     "8Xg89xT8Ve34sKiYqYuMs46mycREsCA2F362UscRpump",
+    "8j2G4CUi8vswXykzyp4PYNGKF9wuLBmYoT6Y4Fcnpump",
     "9KDhovVA2kdjngkFooqEn5FoKkuZeDMYiQtVk7Lbm9up",
     "9a98oQHtxfqmr4EyzsP6wfw69uYAK3JbUeVEuNW1pump",
     "9g4Pib6AM3oVdP9YA7ZcssAXAuhoUzkjR8w27doYpump",
@@ -61,8 +62,8 @@
         "realized": 0.0,
         "entry_price": 8.763629213488592e-05,
         "entry_liq": 25422.94,
-        "peak": 8.642e-05,
-        "last_price": 8.642e-05,
+        "peak": 8.921e-05,
+        "last_price": 8.921e-05,
         "tp1_done": false,
         "opened_ts": 1792349354.1156027,
         "misses": 0,
@@ -283,14 +284,22 @@
       "ts": 1792349354.1155095,
       "why": "jaringan insider memegang sekitar 41.8% pasokan (batas 5%)",
       "done": false
+    },
+    {
+      "sym": "TRENCHBOT",
+      "addr": "8j2G4CUi8vswXykzyp4PYNGKF9wuLBmYoT6Y4Fcnpump",
+      "price": 7.603e-05,
+      "ts": 1792358398.633118,
+      "why": "jaringan insider memegang sekitar 9.9% pasokan (batas 5%)",
+      "done": false
     }
   ],
   "dashboard": {
-    "updated_at": "18:49:24 UTC",
-    "pnl_total": -45.09,
-    "pnl_floating": -0.69,
+    "updated_at": "21:20:04 UTC",
+    "pnl_total": -43.49,
+    "pnl_floating": 0.9,
     "open_positions_count": "1/5",
-    "equity": 954.91,
+    "equity": 956.51,
     "cash": 905.61,
     "status_karyawan": {
       "radar": "Sedang bersiap memindai pasar...",

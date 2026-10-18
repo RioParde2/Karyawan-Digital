@@ -599,9 +599,37 @@ def load_state():
 
 def save_state(state):
     state["seen"] = sorted(set(state["seen"]))[-2000:]
-    SEEN_FILE.write_text(json.dumps(state))
-
-
+    
+    # Hitung data PnL & Nilai Posisi untuk Dashboard Web
+    pf = state.get("portfolio", {})
+    start_bal = pf.get("start", 1000)
+    cash = pf.get("cash", start_bal)
+    positions = pf.get("positions", {})
+    
+    pos_val = sum(p["tokens"] * p.get("last_price", p["entry_price"]) for p in positions.values())
+    equity = cash + pos_val
+    pnl_total = equity - start_bal
+    
+    # Hitung PnL Mengambang (floating PnL dari posisi terbuka)
+    pnl_floating = sum((p.get("last_price", p["entry_price"]) - p["entry_price"]) * p["tokens"] for p in positions.values())
+    
+    # Format data khusus dashboard
+    state["dashboard"] = {
+        "updated_at": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+        "pnl_total": round(pnl_total, 2),
+        "pnl_floating": round(pnl_floating, 2),
+        "open_positions_count": f"{len(positions)}/{MAX_OPEN_POSITIONS}",
+        "equity": round(equity, 2),
+        "cash": round(cash, 2),
+        "status_karyawan": {
+            "radar": state.get("last_radar_status", "Sedang bersiap memindai pasar..."),
+            "perisai": state.get("last_perisai_status", "Menunggu kandidat dari Radar..."),
+            "sigap": state.get("last_sigap_status", "Monitoring posisi terbuka..."),
+            "warta": state.get("last_warta_status", "Menyusun laporan kinerja...")
+        }
+    }
+    
+    SEEN_FILE.write_text(json.dumps(state, indent=2))
 # ==================== BELAJAR DARI DATA ====================
 def shadow_add(state, p, reasons):
     """Catat koin yang ditolak Perisai untuk diamati: apakah penolakan itu tepat?"""

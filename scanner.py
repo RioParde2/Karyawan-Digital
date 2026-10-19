@@ -1,5 +1,5 @@
 """
-DJIWA CRYPTO LABS - Karyawan Digital (versi 3.4)
+DJIWA CRYPTO LABS - Karyawan Digital (versi 3.5)
 
 Karyawan 1 - DJIWA RADAR (Pencari): mencari koin baru/trending dari DexScreener (gratis).
 Karyawan 2 - DJIWA PERISAI (Penilai Risiko, manajer risiko & satpam): mengecek ulang tiap
@@ -19,6 +19,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -61,6 +62,7 @@ MAX_ENTRY_CHANGE_PCT = 300      # Sigap tidak membeli koin yang sudah naik >300%
 MIN_ENTRY_CHANGE_PCT = -30      # ...dan tidak menangkap pisau jatuh (turun >30% dalam 24 jam)
 SHADOW_HOURS = 24               # koin yang ditolak diamati sekian jam untuk menguji akurasi Perisai
 SHADOW_MAX = 150
+MAX_CHECK_ATTEMPTS = 3          # RugCheck gagal 3x untuk satu koin = ditolak demi keamanan
 MAX_TURNOVER = 30               # volume 24 jam > 30x likuiditas = REJECT (rawan volume palsu)
 MAX_ACTIVITY = 40               # jumlah catatan aktivitas untuk dashboard
 MIN_TRADES_FOR_REVIEW = 10      # penilaian strategi dimulai setelah sekian trade selesai
@@ -71,10 +73,11 @@ DEBUG = True                    # cetak contoh data mentah di log (untuk verifik
 BASE = "https://api.dexscreener.com"
 
 
-def get_json(url):
-    req = urllib.request.Request(
-        url, headers={"User-Agent": "karyawan-digital/1.0", "Accept": "application/json"}
-    )
+def get_json(url, headers=None):
+    h = {"User-Agent": "karyawan-digital/1.0", "Accept": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
@@ -230,14 +233,29 @@ def _insider_network_pct(r, nets):
     return max(shares) if shares else None
 
 
+def rc_headers():
+    """Kunci API RugCheck (gratis dari FluxRPC) dikirim lewat header X-API-KEY bila tersedia."""
+    key = os.environ.get("RUGCHECK_API_KEY", "").strip()
+    return {"X-API-KEY": key} if key else None
+
+
 def analyze_risk(mint):
     """
     Manajer risiko yang skeptis. Kembalikan dict, atau None jika data tidak bisa diambil.
     Hasil: ok (lolos semua aturan), reject (daftar alasan penolakan), risk, facts, reasons.
     """
     try:
-        r = get_json(f"{RUGCHECK}/tokens/{mint}/report")
+        r = get_json(f"{RUGCHECK}/tokens/{mint}/report", rc_headers())
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "ignore")[:200].replace("\n", " ")
+        except Exception:
+            body = ""
+        analyze_risk.last_error = f"HTTP {e.code}"
+        print(f"RugCheck gagal untuk {mint}: HTTP {e.code} {body}")
+        return None
     except Exception as e:
+        analyze_risk.last_error = type(e).__name__
         print(f"RugCheck gagal untuk {mint}: {e}")
         return None
 
@@ -677,7 +695,7 @@ def learning_report(pf, state):
 
 
 # ==================== DATA UNTUK DASHBOARD ====================
-def update_dashboard(state, pf, n_cand, n_stage1, accepted, rejected, sim_lines):
+def update_dashboard(state, pf, n_cand, n_stage1, accepted, rejected, sim_lines, pending=0):
     """Tulis ringkasan ke state['dashboard'] dan catatan ke state['activity'] (dibaca index.html)."""
     wib = datetime.now(timezone.utc) + timedelta(hours=7)
     stamp = wib.strftime("%d/%m %H:%M")
@@ -713,7 +731,7 @@ def update_dashboard(state, pf, n_cand, n_stage1, accepted, rejected, sim_lines)
         "positions": plist,
         "status_karyawan": {
             "radar": f"Pindai {n_cand} koin, {n_stage1} lolos",
-            "perisai": (f"{len(accepted)} lolos, {len(rejected)} ditolak" if (accepted or rejected) else "Menunggu kandidat dari Radar"),
+            "perisai": (f"RugCheck gagal: {pending} koin ditunda" if pending else (f"{len(accepted)} lolos, {len(rejected)} ditolak" if (accepted or rejected) else "Menunggu kandidat dari Radar")),
             "sigap": f"Memantau {n_open} posisi" + (f", {len(sim_lines)} aksi" if sim_lines else ""),
             "warta": f"Nilai ${equity:,.0f} ({(equity / pf['start'] - 1) * 100:+.1f}%)",
         },
@@ -725,7 +743,7 @@ def main():
     seen = set(state["seen"])
     pf = state["portfolio"]
     candidates = fetch_candidates()
-    print(f"Kandidat awal: {len(candidates)}")
+    print(f"Kandidat awal: {len(candidates)} | kunci API RugCheck: {'terpasang' if rc_headers() else 'TIDAK ADA'}")
     pairs = fetch_best_pairs(candidates)
     print(f"Data pair ditemukan: {len(pairs)}")
 
@@ -753,14 +771,28 @@ def main():
     print(f"Lolos saring awal (akan dicek manajer risiko): {len(stage1)}")
 
     # Karyawan 2: manajer risiko (skeptis: tidak bisa diverifikasi = tidak dilaporkan)
-    accepted, rejected, checked, rejected_p = [], [], [], []
+    accepted, rejected, checked, rejected_p, pending = [], [], [], [], []
     for score, warns, p in stage1:
         base = p["baseToken"]
         an = analyze_risk(base["address"])
         time.sleep(1.0)
         if an is None:
-            print(f"{base.get('symbol', '?')}: gagal dicek, dicoba lagi putaran berikutnya")
+            att = state.setdefault("attempts", {})
+            n_try = att.get(base["address"], 0) + 1
+            att[base["address"]] = n_try
+            err = getattr(analyze_risk, "last_error", "?")
+            sym_ = base.get("symbol", "?")
+            if n_try >= MAX_CHECK_ATTEMPTS:
+                why_ = [f"RugCheck gagal {n_try}x ({err}), tidak bisa diverifikasi (ditolak demi keamanan)"]
+                checked.append(base["address"])
+                rejected.append((sym_, why_))
+                rejected_p.append((p, why_))
+                att.pop(base["address"], None)
+            else:
+                pending.append((sym_, err, n_try))
+            print(f"{sym_}: gagal dicek ({err}), percobaan {n_try}/{MAX_CHECK_ATTEMPTS}")
             continue
+        state.get("attempts", {}).pop(base["address"], None)
         checked.append(base["address"])
         liq_ = (p.get("liquidity") or {}).get("usd") or 0
         vol_ = (p.get("volume") or {}).get("h24") or 0
@@ -816,6 +848,9 @@ def main():
             say(PERISAI, msg)
             for _, sc, w, p, an in accepted:
                 say(PERISAI, fmt(p, sc, w, an))
+        if pending:
+            say(PERISAI, "RugCheck belum bisa memeriksa: " + ", ".join(f"{s} ({e}, percobaan {n}/{MAX_CHECK_ATTEMPTS})" for s, e, n in pending)
+                + f". Saya tunda dan coba lagi; setelah {MAX_CHECK_ATTEMPTS} kali gagal, koinnya saya tolak demi keamanan.")
         # 3. Sigap menjalankan simulasi
         if sim_lines:
             say(SIGAP, "Menjalankan aturan baku (simulasi, uang pura-pura):\n" + "\n".join(sim_lines))
@@ -830,7 +865,7 @@ def main():
 
     for addr in checked:
         seen.add(addr)
-    update_dashboard(state, pf, len(candidates), len(stage1), accepted, rejected, sim_lines)
+    update_dashboard(state, pf, len(candidates), len(stage1), accepted, rejected, sim_lines, len(pending))
     state["seen"] = list(seen)
     save_state(state)
 

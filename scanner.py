@@ -17,6 +17,7 @@ import json
 import math
 import os
 import re
+import statistics
 import time
 from datetime import datetime, timedelta, timezone
 import urllib.error
@@ -80,6 +81,65 @@ def get_json(url, headers=None):
     req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
+
+
+# ==================== PENCATAT KONDISI PASAR (HANYA MENCATAT) ====================
+# Tidak dipakai untuk memutuskan beli/jual. Kalau gagal, hasilnya kosong dan bot tetap jalan.
+KONDISI_RUN = {}  # diisi sekali per putaran di main(), dicatat ke tags tiap posisi baru
+URL_SOL = ("https://api.coingecko.com/api/v3/coins/markets"
+           "?vs_currency=usd&ids=solana&price_change_percentage=24h,7d")
+
+
+WSOL = "So11111111111111111111111111111111111111112"  # alamat token SOL (wrapped) di Solana
+
+
+def _sol_dari_dexscreener():
+    """Cadangan: perubahan SOL 24 jam dari DexScreener (jalur yang sama dengan pemindai, tanpa layanan baru)."""
+    try:
+        pairs = fetch_best_pairs([("solana", WSOL)])
+        chg = (pairs[0].get("priceChange") or {}).get("h24") if pairs else None
+        return round(chg, 1) if isinstance(chg, (int, float)) else None
+    except Exception:
+        return None
+
+
+def ambil_kondisi_sol(timeout=8):
+    """Perubahan harga SOL 24 jam dan 7 hari (persen). Utama: CoinGecko; cadangan 24 jam: DexScreener."""
+    hasil = {"sol_24j": None, "sol_7h": None}
+    try:
+        req = urllib.request.Request(URL_SOL, headers={"User-Agent": "karyawan-digital/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.load(r)[0]
+        sol24 = d.get("price_change_percentage_24h_in_currency")
+        sol7 = d.get("price_change_percentage_7d_in_currency")
+        hasil["sol_24j"] = round(sol24, 1) if isinstance(sol24, (int, float)) else None
+        hasil["sol_7h"] = round(sol7, 1) if isinstance(sol7, (int, float)) else None
+    except Exception as e:
+        print(f"CoinGecko tidak bisa dipakai ({e}); pakai cadangan DexScreener untuk SOL 24 jam.")
+    if hasil["sol_24j"] is None:
+        hasil["sol_24j"] = _sol_dari_dexscreener()
+    return hasil
+
+
+def ringkas_meme(perubahan_24j):
+    """Ringkasan koin yang dipindai: jumlah, median kenaikan 24 jam, persen yang naik."""
+    kosong = {"meme_n": 0, "meme_median_24j": None, "meme_naik_pct": None}
+    try:
+        data = [float(x) for x in perubahan_24j if isinstance(x, (int, float))]
+        if not data:
+            return kosong
+        naik = sum(1 for x in data if x > 0)
+        return {"meme_n": len(data), "meme_median_24j": round(statistics.median(data), 1),
+                "meme_naik_pct": round(100 * naik / len(data))}
+    except Exception:
+        return kosong
+
+
+def kondisi_pasar(perubahan_24j_koin):
+    hasil = {}
+    hasil.update(ambil_kondisi_sol())
+    hasil.update(ringkas_meme(perubahan_24j_koin))
+    return hasil
 
 
 # ==================== KARYAWAN 1: PENCARI ====================
@@ -575,6 +635,7 @@ def paper_enter(pf, accepted):
                 "chg24": chg, "turnover": round(vol / liq, 1) if liq else None, "liq": round(liq),
                 "risk": an["risk"] if an else None, "security": (an["facts"].get("security") if an else None),
                 "score": round(sc, 1),
+                "pasar": dict(KONDISI_RUN),
             },
         }
         lines.append(
@@ -746,6 +807,14 @@ def main():
     print(f"Kandidat awal: {len(candidates)} | kunci API RugCheck: {'terpasang' if rc_headers() else 'TIDAK ADA'}")
     pairs = fetch_best_pairs(candidates)
     print(f"Data pair ditemukan: {len(pairs)}")
+
+    # Catat kondisi pasar sekali per putaran (hanya pencatatan, tidak memengaruhi keputusan)
+    global KONDISI_RUN
+    try:
+        KONDISI_RUN = kondisi_pasar([(p.get("priceChange") or {}).get("h24") for p in pairs])
+    except Exception:
+        KONDISI_RUN = {}
+    print(f"Kondisi pasar (dicatat): {KONDISI_RUN}")
 
     # Karyawan 1: saring awal (sambil menghitung alasan gagal)
     funnel = Counter()

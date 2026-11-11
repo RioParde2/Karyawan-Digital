@@ -28,7 +28,7 @@ from pathlib import Path
 
 # ====== PENGATURAN KARYAWAN 1: PENCARI ======
 CHAINS = {"solana"}             # penilai risiko otomatis baru mendukung Solana
-MIN_LIQUIDITY_USD = 20_000      # likuiditas minimal
+MIN_LIQUIDITY_USD = 30_000      # likuiditas minimal (v2; v1 = 20_000)
 MIN_VOLUME_24H_USD = 50_000     # volume 24 jam minimal
 MIN_TXNS_24H = 150              # jumlah transaksi 24 jam minimal
 MIN_AGE_HOURS = 3               # abaikan koin yang terlalu baru
@@ -59,8 +59,9 @@ DAILY_LOSS_LIMIT_PCT = 5        # rugi bersih harian 5% modal -> stop beli sampa
 LIQ_COLLAPSE_PCT = 50           # jual jika likuiditas anjlok lebih dari 50% (tanda rug)
 FEE_PCT = 1.0                   # biaya per transaksi (fee DEX + biaya lain), konservatif
 STRICT_INSIDER_UNKNOWN = True    # jaringan insider yang porsinya tidak bisa dipastikan = REJECT
-MAX_ENTRY_CHANGE_PCT = 300      # Sigap tidak membeli koin yang sudah naik >300% dalam 24 jam
+MAX_ENTRY_CHANGE_PCT = 100      # Sigap tidak membeli koin yang sudah naik >100% dalam 24 jam (v2; v1 = 300)
 MIN_ENTRY_CHANGE_PCT = -30      # ...dan tidak menangkap pisau jatuh (turun >30% dalam 24 jam)
+RULES_VERSION = "v2"            # penanda aturan; dicatat di tags tiap posisi baru (posisi tanpa penanda = v1)
 SHADOW_HOURS = 24               # koin yang ditolak diamati sekian jam untuk menguji akurasi Perisai
 SHADOW_MAX = 150
 MAX_CHECK_ATTEMPTS = 3          # RugCheck gagal 3x untuk satu koin = ditolak demi keamanan
@@ -636,6 +637,7 @@ def paper_enter(pf, accepted):
                 "risk": an["risk"] if an else None, "security": (an["facts"].get("security") if an else None),
                 "score": round(sc, 1),
                 "pasar": dict(KONDISI_RUN),
+                "ver": RULES_VERSION,
             },
         }
         lines.append(
@@ -744,6 +746,14 @@ def learning_report(pf, state):
                              f"sisanya {sum(1 for c in b if c['pnl'] > 0)}/{len(b)}")
     else:
         lines.append(f"Trade: {len(closed)} selesai (penilaian strategi mulai setelah {MIN_TRADES_FOR_REVIEW} trade).")
+    def _ringkas(rows):
+        if not rows:
+            return "belum ada trade selesai"
+        return f"{len(rows)} trade, menang {sum(1 for c in rows if c['pnl'] > 0)}, hasil ${sum(c['pnl'] for c in rows):+.2f}"
+    v2 = [c for c in closed if (c.get("tags") or {}).get("ver") == RULES_VERSION]
+    v1 = [c for c in closed if (c.get("tags") or {}).get("ver") != RULES_VERSION]
+    lines.append(f"Pembanding aturan: v1 (lama) {_ringkas(v1)} | {RULES_VERSION} (likuiditas >= ${MIN_LIQUIDITY_USD / 1000:.0f} ribu, "
+                 f"naik 24j <= {MAX_ENTRY_CHANGE_PCT}%) {_ringkas(v2)}.")
     done = [x for x in state.get("shadow", []) if x.get("done")]
     if len(done) >= 5:
         right = sum(1 for x in done if x["result"] in ("rontok", "hilang"))

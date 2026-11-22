@@ -59,9 +59,9 @@ DAILY_LOSS_LIMIT_PCT = 5        # rugi bersih harian 5% modal -> stop beli sampa
 LIQ_COLLAPSE_PCT = 50           # jual jika likuiditas anjlok lebih dari 50% (tanda rug)
 FEE_PCT = 1.0                   # biaya per transaksi (fee DEX + biaya lain), konservatif
 STRICT_INSIDER_UNKNOWN = True    # jaringan insider yang porsinya tidak bisa dipastikan = REJECT
-MAX_ENTRY_CHANGE_PCT = 100      # Sigap tidak membeli koin yang sudah naik >100% dalam 24 jam (v2; v1 = 300)
+MAX_ENTRY_CHANGE_PCT = 300      # Sigap tidak membeli koin yang sudah naik >300% dalam 24 jam (v2b; v2 = 100; v1 = 300)
 MIN_ENTRY_CHANGE_PCT = -30      # ...dan tidak menangkap pisau jatuh (turun >30% dalam 24 jam)
-RULES_VERSION = "v2"            # penanda aturan; dicatat di tags tiap posisi baru (posisi tanpa penanda = v1)
+RULES_VERSION = "v2b"           # penanda aturan; dicatat di tags tiap posisi baru (posisi tanpa penanda = v1)
 SHADOW_HOURS = 24               # koin yang ditolak diamati sekian jam untuk menguji akurasi Perisai
 SHADOW_MAX = 150
 MAX_CHECK_ATTEMPTS = 3          # RugCheck gagal 3x untuk satu koin = ditolak demi keamanan
@@ -647,17 +647,49 @@ def paper_enter(pf, accepted):
     return lines
 
 
+def _ver(c):
+    """Versi aturan sebuah trade. Tanpa penanda = v1 (sebelum pencatatan versi dipasang)."""
+    return (c.get("tags") or {}).get("ver") or "v1"
+
+
+def _jenis_keluar(c):
+    r = c.get("reason", "")
+    if "rug" in r or "likuiditas" in r or "hilang" in r:
+        return "rug"
+    if "stop-loss" in r:
+        return "stop-loss"
+    if "trailing" in r:
+        return "trailing"
+    if "jam" in r:
+        return "batas waktu"
+    return "lainnya"
+
+
+def _ringkas(rows):
+    if not rows:
+        return "belum ada trade selesai"
+    n = len(rows)
+    hasil = sum(c["pnl"] for c in rows)
+    rug = sum(1 for c in rows if _jenis_keluar(c) == "rug")
+    return (f"{n} trade, menang {sum(1 for c in rows if c['pnl'] > 0)}, hasil ${hasil:+.2f} "
+            f"(rata-rata ${hasil / n:+.2f}/trade), rug {rug} ({rug / n * 100:.0f}%)")
+
+
 def portfolio_summary(pf):
     pos_value = sum(p["tokens"] * p.get("last_price", p["entry_price"]) for p in pf["positions"].values())
     equity = pf["cash"] + pos_value
     closed = pf["closed"]
     wins = sum(1 for c in closed if c["pnl"] > 0)
     realized = sum(c["pnl"] for c in closed)
+    cur = [c for c in closed if _ver(c) == RULES_VERSION]
+    cur_wins = sum(1 for c in cur if c["pnl"] > 0)
+    cur_real = sum(c["pnl"] for c in cur)
     return (
         "[SIMULASI] Ringkasan uang pura-pura\n"
         f"Nilai total (perkiraan): ${equity:,.2f} ({(equity / pf['start'] - 1) * 100:+.1f}% dari ${pf['start']:,.0f})\n"
         f"Kas: ${pf['cash']:,.2f} | posisi terbuka: {len(pf['positions'])}\n"
-        f"Trade selesai: {len(closed)} (menang {wins}) | untung/rugi terealisasi: {realized:+.2f} USD"
+        f"Akun gabungan semua versi - trade selesai: {len(closed)} (menang {wins}) | untung/rugi terealisasi: {realized:+.2f} USD\n"
+        f"Khusus aturan {RULES_VERSION} - trade selesai: {len(cur)} (menang {cur_wins}) | untung/rugi terealisasi: {cur_real:+.2f} USD"
     )
 
 
@@ -726,7 +758,10 @@ def shadow_update(state):
 
 def learning_report(pf, state):
     lines = []
-    closed = [c for c in pf["closed"] if "pnl" in c]
+    closed_all = [c for c in pf["closed"] if "pnl" in c]
+    closed = [c for c in closed_all if _ver(c) == RULES_VERSION]  # rapor ini HANYA menghitung versi berjalan
+    lines.append(f"[Aturan {RULES_VERSION}] likuiditas >= ${MIN_LIQUIDITY_USD / 1000:.0f} ribu, naik 24j <= {MAX_ENTRY_CHANGE_PCT}%. "
+                 f"Angka di bawah hanya dari trade {RULES_VERSION}.")
     if len(closed) >= MIN_TRADES_FOR_REVIEW:
         n = len(closed)
         wins = [c["pct"] for c in closed if c["pnl"] > 0]
@@ -734,7 +769,7 @@ def learning_report(pf, state):
         avg_w = sum(wins) / len(wins) if wins else 0
         avg_l = sum(losses) / len(losses) if losses else 0
         exp = sum(c["pnl"] for c in closed) / n
-        lines.append(f"Trade: {n} selesai, menang {len(wins)} ({len(wins) / n * 100:.0f}%). Rata-rata menang {avg_w:+.0f}%, "
+        lines.append(f"Trade {RULES_VERSION}: {n} selesai, menang {len(wins)} ({len(wins) / n * 100:.0f}%). Rata-rata menang {avg_w:+.0f}%, "
                      f"rata-rata kalah {avg_l:+.0f}%, hasil rata-rata ${exp:+.2f} per trade.")
         for name, f in (("naik 24j >100% saat dibeli", lambda t: (t.get("chg24") or 0) > 100),
                         ("umur <12 jam saat dibeli", lambda t: (t.get("age_h") if t.get("age_h") is not None else 99) < 12),
@@ -745,20 +780,26 @@ def learning_report(pf, state):
                 lines.append(f"- {name}: menang {sum(1 for c in a if c['pnl'] > 0)}/{len(a)}, "
                              f"sisanya {sum(1 for c in b if c['pnl'] > 0)}/{len(b)}")
     else:
-        lines.append(f"Trade: {len(closed)} selesai (penilaian strategi mulai setelah {MIN_TRADES_FOR_REVIEW} trade).")
-    def _ringkas(rows):
-        if not rows:
-            return "belum ada trade selesai"
-        return f"{len(rows)} trade, menang {sum(1 for c in rows if c['pnl'] > 0)}, hasil ${sum(c['pnl'] for c in rows):+.2f}"
-    v2 = [c for c in closed if (c.get("tags") or {}).get("ver") == RULES_VERSION]
-    v1 = [c for c in closed if (c.get("tags") or {}).get("ver") != RULES_VERSION]
-    lines.append(f"Pembanding aturan: v1 (lama) {_ringkas(v1)} | {RULES_VERSION} (likuiditas >= ${MIN_LIQUIDITY_USD / 1000:.0f} ribu, "
-                 f"naik 24j <= {MAX_ENTRY_CHANGE_PCT}%) {_ringkas(v2)}.")
+        lines.append(f"Trade {RULES_VERSION}: {len(closed)} selesai (penilaian strategi mulai setelah {MIN_TRADES_FOR_REVIEW} trade).")
+    if closed:
+        jenis = {}
+        for c in closed:
+            jenis[_jenis_keluar(c)] = jenis.get(_jenis_keluar(c), 0) + 1
+        lines.append(f"Ringkasan {RULES_VERSION}: " + _ringkas(closed) + ". Alasan keluar: "
+                     + ", ".join(f"{k} {v}" for k, v in sorted(jenis.items(), key=lambda x: -x[1])) + ".")
+    arsip = {}
+    for c in closed_all:
+        if _ver(c) != RULES_VERSION:
+            arsip.setdefault(_ver(c), []).append(c)
+    if arsip:
+        lines.append("Arsip versi lama (terpisah, tidak dihitung di atas):")
+        for v in sorted(arsip):
+            lines.append(f"- {v}: {_ringkas(arsip[v])}")
     done = [x for x in state.get("shadow", []) if x.get("done")]
     if len(done) >= 5:
         right = sum(1 for x in done if x["result"] in ("rontok", "hilang"))
         miss = sum(1 for x in done if x["result"] == "naik")
-        lines.append(f"Akurasi Perisai: dari {len(done)} koin ditolak (diamati {SHADOW_HOURS} jam), {right} rontok/hilang (penolakan tepat), "
+        lines.append(f"Akurasi Perisai (semua versi): dari {len(done)} koin ditolak (diamati {SHADOW_HOURS} jam), {right} rontok/hilang (penolakan tepat), "
                      f"{miss} naik >50% (terlewat), {len(done) - right - miss} datar.")
     else:
         lines.append(f"Akurasi Perisai: baru {len(done)} koin ditolak yang selesai diamati (minimal 5).")
